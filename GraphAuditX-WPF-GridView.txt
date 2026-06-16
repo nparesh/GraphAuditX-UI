@@ -1,0 +1,147 @@
+Add-Type -AssemblyName PresentationFramework
+
+$configPath = "C:\GraphAuditX-PowerShell-Module\AuditOperationsGateConfig.csv"
+
+function Clean-String {
+    param($value)
+    if (-not $value) { return "" }
+    return ([string]$value -replace '[\r\n]+','').Trim()
+}
+
+$configData = Import-Csv $configPath | ForEach-Object {
+    [PSCustomObject]@{
+        Workload   = Clean-String $_.Workload
+        RecordType = Clean-String $_.RecordType
+        Operation  = Clean-String $_.Operation
+    }
+}
+
+[xml]$xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="GraphAuditX"
+        Height="700"
+        Width="720"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen">
+
+<Grid Margin="20">
+
+<Grid.RowDefinitions>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="150"/>
+<RowDefinition Height="*"/>
+<RowDefinition Height="Auto"/>
+</Grid.RowDefinitions>
+
+<!-- HEADER -->
+<StackPanel Orientation="Horizontal">
+<TextBlock Text="GraphAuditX" FontSize="22" FontWeight="SemiBold"/>
+<TextBlock Text="  Pro version 1.2" FontSize="12"/>
+</StackPanel>
+
+<!-- DATES -->
+<StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,10">
+<DatePicker Name="StartDate" Width="140"/>
+<DatePicker Name="EndDate" Width="140" Margin="10,0"/>
+<TextBox Name="ResultSizeBox" Width="120" Margin="10,0"/>
+</StackPanel>
+
+<!-- 🔥 FILTERS FIX (GRID instead of StackPanel) -->
+<Grid Grid.Row="2">
+
+<Grid.RowDefinitions>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="70"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="70"/>
+<RowDefinition Height="Auto"/>
+<RowDefinition Height="70"/>
+</Grid.RowDefinitions>
+
+<TextBlock Text="Workload"/>
+<ListBox Name="WorkloadBox" Grid.Row="1" SelectionMode="Extended"/>
+
+<TextBlock Text="Record Type" Grid.Row="2" Margin="0,10,0,0"/>
+<ListBox Name="RecordTypeBox" Grid.Row="3" SelectionMode="Extended"/>
+
+<TextBlock Text="Operation" Grid.Row="4" Margin="0,10,0,0"/>
+<ListBox Name="OperationBox" Grid.Row="5" SelectionMode="Extended"/>
+
+</Grid>
+
+<!-- SYNTAX -->
+<StackPanel Grid.Row="3">
+<TextBox Name="SyntaxBox" Height="50" Background="#E6FFFA"/>
+<TextBox Name="LegacySyntaxBox" Height="50" Background="#FFF5F5"/>
+</StackPanel>
+
+<!-- RESULTS -->
+<DataGrid Name="ResultsGrid" Grid.Row="4"/>
+
+<!-- RUN -->
+<Button Name="RunBtn" Grid.Row="5" Content="Run Audit" Width="150" HorizontalAlignment="Right"/>
+
+</Grid>
+</Window>
+"@
+
+$window = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader $xaml))
+
+$WorkloadBox   = $window.FindName("WorkloadBox")
+$RecordTypeBox = $window.FindName("RecordTypeBox")
+$OperationBox  = $window.FindName("OperationBox")
+$SyntaxBox     = $window.FindName("SyntaxBox")
+$LegacyBox     = $window.FindName("LegacySyntaxBox")
+$RunBtn        = $window.FindName("RunBtn")
+$StartDate     = $window.FindName("StartDate")
+$EndDate       = $window.FindName("EndDate")
+$ResultsGrid   = $window.FindName("ResultsGrid")
+
+# Load workloads
+$WorkloadBox.ItemsSource = $configData.Workload | Sort-Object -Unique
+
+# Filtering
+$WorkloadBox.Add_SelectionChanged({
+    $filtered = $configData | Where-Object {
+        $WorkloadBox.SelectedItems -contains $_.Workload
+    }
+    $RecordTypeBox.ItemsSource = $filtered.RecordType | Sort-Object -Unique
+})
+
+$RecordTypeBox.Add_SelectionChanged({
+    $filtered = $configData | Where-Object {
+        $WorkloadBox.SelectedItems -contains $_.Workload -and
+        $RecordTypeBox.SelectedItems -contains $_.RecordType
+    }
+    $OperationBox.ItemsSource = $filtered.Operation | Sort-Object -Unique
+})
+
+# Syntax
+function Update-Syntax {
+    $w = $WorkloadBox.SelectedItems -join ","
+    $r = $RecordTypeBox.SelectedItems -join ","
+    $o = $OperationBox.SelectedItems -join ","
+
+    $SyntaxBox.Text = "GraphAuditX -Workloads `"$w`" -RecordType `"$r`" -Operations `"$o`""
+    $LegacyBox.Text = "Search-UnifiedAuditLog -Workloads `"$w`" -RecordTypes `"$r`" -Operations `"$o`""
+}
+
+$WorkloadBox.Add_SelectionChanged({ Update-Syntax })
+$RecordTypeBox.Add_SelectionChanged({ Update-Syntax })
+$OperationBox.Add_SelectionChanged({ Update-Syntax })
+
+# Run
+$RunBtn.Add_Click({
+    Import-Module "C:\GraphAuditX-PowerShell-Module\GraphAuditX\GraphAuditX.psd1" -Force
+
+    $ResultsGrid.ItemsSource = GraphAuditX `
+        -StartDate $StartDate.SelectedDate `
+        -EndDate $EndDate.SelectedDate `
+        -Workloads $WorkloadBox.SelectedItems `
+        -RecordType $RecordTypeBox.SelectedItems `
+        -Operations $OperationBox.SelectedItems
+})
+
+$window.ShowDialog()
